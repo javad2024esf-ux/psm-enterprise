@@ -1,0 +1,69 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  PSM Enterprise — C# Backend Dockerfile (Phase 5 Production)    ║
+# ║  Multi-stage: build → runtime (minimal Alpine image)            ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+# ─── Stage 1: Build ──────────────────────────────────────────────────────────
+FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS builder
+
+WORKDIR /src
+
+# Copy project file and restore dependencies (cached layer)
+# For Alpine Linux (musl), we need to restore for linux-musl-x64
+# Configure NuGet for better network reliability
+COPY backend-csharp/PSM.Api.csproj ./PSM.Api/
+ENV NUGET_HTTPSTIMEOUT=300
+RUN dotnet restore ./PSM.Api/PSM.Api.csproj -r linux-musl-x64 --disable-parallel 2>&1
+
+# Copy everything and build with production optimizations for Alpine Linux
+COPY backend-csharp/ ./PSM.Api/
+RUN dotnet publish ./PSM.Api/PSM.Api.csproj \
+    -c Release \
+    -r linux-musl-x64 \
+    -o /app/publish \
+    --no-restore \
+    /p:PublishSingleFile=true \
+    /p:SelfContained=false \
+    /p:PublishTrimmed=true \
+    /p:TrimMode=partial \
+    /p:PublishReadyToRun=true
+
+# ─── Stage 2: Runtime ────────────────────────────────────────────────────────
+FROM mcr.microsoft.com/dotnet/aspnet:8.0-alpine AS runtime
+
+LABEL maintainer="PSM Enterprise Team"
+LABEL version="5.0"
+LABEL description="PSM Enterprise Backend — C# ASP.NET Core v5.0 Production"
+
+WORKDIR /app
+
+# Install curl for health checks (Alpine)
+RUN apk add --no-cache curl
+
+# Create non-root user with minimal privileges
+RUN addgroup -g 1001 -S psm && \
+    adduser -S psm -u 1001 -G psm
+
+# Copy published output with correct ownership
+COPY --from=builder --chown=psm:psm /app/publish .
+
+# Create data and log directories with correct ownership
+RUN mkdir -p data/documents logs && \
+    chown -R psm:psm data logs
+
+# Create DataProtection-Keys directory for ASP.NET Core data protection
+RUN mkdir -p /home/psm/.aspnet/DataProtection-Keys && \
+    chown -R psm:psm /home/psm/.aspnet
+
+# Set non-root user
+USER psm
+
+# Expose API port
+EXPOSE 3000
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+# Production entrypoint
+ENTRYPOINT ["dotnet", "PSM.Api.dll"]

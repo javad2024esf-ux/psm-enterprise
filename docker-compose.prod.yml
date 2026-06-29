@@ -1,0 +1,185 @@
+version: "3.9"
+
+name: ${COMPOSE_PROJECT_NAME:-psm-production}
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    restart: on-failure:5
+    container_name: ${COMPOSE_PROJECT_NAME:-psm}-db
+    environment:
+      POSTGRES_DB: ${PG_DATABASE:-psm}
+      POSTGRES_USER: ${PG_USER:-psm_user}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?error}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - psm_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-psm_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - psm_net
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    restart: on-failure:5
+    container_name: ${COMPOSE_PROJECT_NAME:-psm}-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?error}
+    volumes:
+      - psm_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - psm_net
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend-csharp
+    restart: on-failure:5
+    container_name: ${COMPOSE_PROJECT_NAME:-psm}-backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database Configuration
+      PG_HOST: db
+      PG_PORT: 5432
+      PG_DATABASE: ${PG_DATABASE:-psm}
+      PG_USER: ${PG_USER:-psm_user}
+      PG_PASSWORD: ${PG_PASSWORD:?error}
+      PG_SSL: "true"
+      
+      # Redis Configuration
+      REDIS_CONNECTION: redis://default:${REDIS_PASSWORD:?error}@redis:6379
+      
+      # ASP.NET Configuration
+      PORT: 3000
+      DATA_DIR: /app/data
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:3000
+      
+      # JWT Authentication
+      JWT_SECRET: ${JWT_SECRET:?error}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      
+      # CORS & Security
+      CORS_ORIGINS: ${CORS_ORIGINS:?error}
+      
+      # Admin Seeding
+      ADMIN_SEED_USERNAME: ${ADMIN_SEED_USERNAME:-admin}
+      ADMIN_SEED_PASSWORD: ${ADMIN_SEED_PASSWORD:?error}
+      PSM_LICENSE_SECRET: ${PSM_LICENSE_SECRET:?error}
+      
+      # AI Integration
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-claude-sonnet-4-6}
+      AI_ENABLED: ${AI_ENABLED:-true}
+    
+    volumes:
+      - psm_data:/app/data
+    networks:
+      - psm_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_URL: /api
+    restart: on-failure:5
+    container_name: ${COMPOSE_PROJECT_NAME:-psm}-frontend
+    depends_on:
+      - backend
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - psm_net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '1'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  psm_pgdata:
+    driver: local
+  psm_data:
+    driver: local
+  psm_redisdata:
+    driver: local
+
+networks:
+  psm_net:
+    driver: bridge

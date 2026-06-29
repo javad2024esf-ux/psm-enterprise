@@ -1,0 +1,17 @@
+{
+  "name": "psm-enterprise",
+  "version": "9.0.0",
+  "description": "PSM Enterprise — Monorepo Root",
+  "private": true,
+  "scripts": {
+    "install:all":   "cd backend-csharp && dotnet restore && cd ../frontend && npm install --legacy-peer-deps",
+    "dev:backend":   "cd backend-csharp && dotnet run",
+    "dev:frontend":  "cd frontend && npm run dev",
+    "dev":           "npm run dev:backend & npm run dev:frontend",
+    "build:backend": "cd backend-csharp && dotnet publish -c Release -o ../dist/backend",
+    "build:frontend":"cd frontend && npm run build",
+    "build":         "npm run build:backend && npm run build:frontend",
+    "stop":          "pkill -f 'PSM.Api' ; pkill -f 'dotnet run' ; pkill -f vite",
+    "docker:up":     "bash install.sh"
+  }
+}

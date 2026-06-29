@@ -1,0 +1,82 @@
+name: ${COMPOSE_PROJECT_NAME:-psm-enterprise}
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PG_DATABASE:-psm}
+      POSTGRES_USER: ${PG_USER:-psm_user}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - psm_pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${PG_PORT_EXTERNAL:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-psm_user} -d ${PG_DATABASE:-psm}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - psm_net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend-csharp
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PG_HOST: db
+      PG_PORT: 5432
+      PG_DATABASE: ${PG_DATABASE:-psm}
+      PG_USER: ${PG_USER:-psm_user}
+      PG_PASSWORD: ${PG_PASSWORD}
+      PG_SSL: "false"
+      PORT: 3000
+      DATA_DIR: /app/data
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      CORS_ORIGINS: http://localhost,http://localhost:80
+      ADMIN_SEED_USERNAME: ${ADMIN_SEED_USERNAME:-admin}
+      ADMIN_SEED_PASSWORD: ${ADMIN_SEED_PASSWORD:-Admin@PSM#2026}
+      PSM_LICENSE_SECRET: ${PSM_LICENSE_SECRET:-license_secret_2024_psm_enterprise_v9}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-claude-sonnet-4-6}
+    volumes:
+      - psm_data:/app/data
+      - psm_dataprotection:/home/psm/.aspnet/DataProtection-Keys
+    ports:
+      - "127.0.0.1:3131:3000"
+    networks:
+      - psm_net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_URL: /api
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    volumes:
+      - ./nginx/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - psm_net
+
+volumes:
+  psm_pgdata:
+    driver: local
+  psm_data:
+    driver: local
+  psm_dataprotection:
+    driver: local
+
+networks:
+  psm_net:
